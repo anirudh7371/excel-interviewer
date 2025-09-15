@@ -3,12 +3,15 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
+      - '-f'
+      - 'backend/Dockerfile'
       - '-t'
       - 'gcr.io/$PROJECT_ID/excel-interview-app:$COMMIT_SHA'
       - '-t'
       - 'gcr.io/$PROJECT_ID/excel-interview-app:latest'
-      - '.'
+      - 'backend'
     id: 'Build Application'
+
 
   # Deploy to Cloud Run
   - name: 'gcr.io/cloud-builders/gcloud'
@@ -36,13 +39,12 @@ steps:
 
 # Push images to Google Container Registry
 images:
-  - 'gcr.io/$PROJECT_ID/excel-interview-app:$COMMIT_SHA'
-  - 'gcr.io/$PROJECT_ID/excel-interview-app:latest'
+  - "gcr.io/ai-excel-interviewer/excel-interview-app"
 
 # Substitution variables (set in Cloud Build triggers)
 substitutions:
-  _DATABASE_URL: 'postgresql://user:password@/db?host=/cloudsql/project:region:instance'
-  _GEMINI_API_KEY: 'your-gemini-api-key'
+  _DATABASE_URL: 'postgresql://user:anirudh@/db?host=/cloudsql/ai-excel-interviewer:us-central1:excel-interview-db'
+  _GEMINI_API_KEY: 'AIzaSyAAdSCqdP6ZQfhNaa8iRQBQV-acY-24C9U'
 
 options:
   logging: CLOUD_LOGGING_ONLY
