@@ -8,7 +8,7 @@ import asyncio
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(dot_env_path="./.env")
 # FastAPI & related
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
