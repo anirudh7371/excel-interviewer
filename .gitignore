@@ -90,8 +90,7 @@ htmlcov/
 /node_modules
 /.pnp
 .pnp.js
-yarn.lock
-package-lock.json
+yarn.lock]
 
 # Production builds from various frameworks
 /build
