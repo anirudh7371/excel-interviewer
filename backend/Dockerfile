@@ -29,4 +29,4 @@ COPY . .
 RUN mkdir -p static/tts static/reports
 
 # Run the application with uvicorn
-CMD exec uvicorn main:app --host 0.0.0.0 --port $PORT --workers 4
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 4"]

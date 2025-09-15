@@ -12,6 +12,11 @@ psycopg2-binary
 # AI Services
 google-generativeai
 
+#gcp
+google-cloud-sql-connector
+google-cloud-storage
+google-cloud-logging
+
 # Speech Recognition
 SpeechRecognition
 pydub
@@ -30,3 +35,5 @@ Pillow
 
 gTTS
 python-dotenv
+gunicorn
+structlog

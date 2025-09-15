@@ -4,11 +4,19 @@ import json
 import uuid
 import tempfile
 import traceback
+import logging
 import asyncio
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
 load_dotenv(dot_env_path="./.env")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # FastAPI & related
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -43,6 +51,11 @@ from reportlab.lib.enums import TA_LEFT
 # Configuration
 # ------------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./excel_interviewer.db")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+if "railway.internal" in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("railway.internal", "localhost")
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MAX_QUESTIONS = int(os.getenv("MAX_QUESTIONS", "10"))
 MAX_FOLLOWUPS = int(os.getenv("MAX_FOLLOWUPS", "1"))
@@ -52,6 +65,12 @@ TTS_DIR = os.path.join(STATIC_DIR, "tts")
 REPORTS_DIR = os.path.join(STATIC_DIR, "reports")
 os.makedirs(TTS_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Excel Interview Platform API")
 

@@ -12,8 +12,12 @@ import {
   GraduationCap,
 } from 'lucide-react';
 
-const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:8000/api";
-const SERVER_ROOT = API_BASE.replace('/api', '');
+const API_BASE = process.env.REACT_APP_API_URL?.replace(/\/$/, '') || 
+                 (window.location.origin.includes('localhost') ? 
+                  'http://localhost:8000' : 
+                  window.location.origin);
+
+const SERVER_ROOT = API_BASE;
 // Finish redirect settings (can be set in env)
 const FINISH_REDIRECT_URL = process.env.REACT_APP_FINISH_REDIRECT_URL || "";
 const FINISH_REDIRECT_DELAY_MS = parseInt(process.env.REACT_APP_FINISH_REDIRECT_DELAY_MS || "5000", 10);
