@@ -1,18 +1,32 @@
-/venv
-/.venv
-/env
-/virtual
-/pyenv
-/.env
+# =========================
+# Python virtual environments
+# =========================
+# Common venv folders
+venv/
+.venv/
+/env/
+virtual/
+/pyenv/
+/.virtualenv/
+.python-version
 
-Python cache files
-pycache/
-*.pyc
+# Also ignore environment files that may contain secrets
+.env
+.env.*
+!.env.example
+
+# =========================
+# Python cache / bytecode
+# =========================
+__pycache__/
+*.py[cod]
 *.pyo
 *.pyd
 .Python
 
-Distribution / Packaging
+# =========================
+# Distribution / Packaging
+# =========================
 /build/
 /dist/
 /downloads/
@@ -28,15 +42,18 @@ Distribution / Packaging
 *.egg
 /pip-wheel-metadata/
 
-Databases
-Ignore local database files.
+# =========================
+# Databases
+# =========================
+# Ignore local database files
 *.sqlite3
 *.db
 *.sqlite
 
-AI / Machine Learning
-Ignore large model files, datasets, and caches.
-It's better to download these on the server or use a pointer system like DVC.
+# =========================
+# AI / Machine Learning artifacts
+# =========================
+# Large model files, datasets, caches
 *.pt
 *.pth
 *.h5
@@ -48,34 +65,44 @@ It's better to download these on the server or use a pointer system like DVC.
 /.cache/huggingface/
 /.cache/torch/
 
-Jupyter Notebook Checkpoints
+# =========================
+# Jupyter
+# =========================
 .ipynb_checkpoints
 
-Pytest cache
+# =========================
+# Testing / Coverage
+# =========================
 .pytest_cache
 .tox
 .coverage
 htmlcov/
 .hypothesis/
 
-Instance folder (common in Flask/Quart, good practice for FastAPI)
+# =========================
+# Instance / runtime folders
+# =========================
 /instance
 
-Dependencies
+# =========================
+# Node / frontend
+# =========================
 /node_modules
 /.pnp
 .pnp.js
 yarn.lock
 package-lock.json
 
-Production builds
+# Production builds from various frameworks
 /build
 /dist
 /.next/
 /.nuxt/
 /.vuepress/dist/
 
-Logs
+# =========================
+# Logs & runtime artifacts
+# =========================
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -84,22 +111,24 @@ pids
 *.seed
 *.pid.lock
 
-Caching
+# =========================
+# Caches
+# =========================
 .npm
 .eslintcache
 .parcel-cache
 .cache
+.fusebox/
 
-Other
+# =========================
+# Other archives / bundles
+# =========================
 *.tgz
 .yarn-integrity
 
-Never commit secrets, API keys, or environment-specific settings.
-.env
-.env.*
-!.env.example
-
-Editor directories and files
+# =========================
+# Editor directories and files
+# =========================
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
@@ -110,7 +139,9 @@ Editor directories and files
 *.sln
 *.sw?
 
-OS-generated files
+# =========================
+# OS generated files
+# =========================
 .DS_Store
 .DS_Store?
 ._*
@@ -119,14 +150,17 @@ OS-generated files
 ehthumbs.db
 Thumbs.db
 
-Serverless directories
+# =========================
+# Serverless
+# =========================
 .serverless/
 
-FuseBox cache
-.fusebox/
-
-DynamoDB Local files
+# =========================
+# DynamoDB Local
+# =========================
 .dynamodb/
 
-TernJS port file
+# =========================
+# Misc
+# =========================
 .tern-port

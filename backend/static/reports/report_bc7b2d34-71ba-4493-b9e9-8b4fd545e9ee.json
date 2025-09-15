@@ -1,0 +1,122 @@
+{
+  "session_id": "bc7b2d34-71ba-4493-b9e9-8b4fd545e9ee",
+  "candidate_name": "Anirudh",
+  "candidate_email": "anirudh7371@gmail.com",
+  "college_name": "VIT",
+  "roll_number": "22BCE0563",
+  "skill_level": "intermediate",
+  "started_at": "2025-09-14T19:49:36.670595",
+  "completed_at": "2025-09-14T19:57:26.771579",
+  "overall_score": 58.8,
+  "total_questions": 12,
+  "total_time_minutes": 0.0,
+  "answers": [
+    {
+      "question_id": null,
+      "user_answer": "I am Anirudh currently a student at Vellore Institute of Technology have done various projects including AI interface",
+      "score": 60.0,
+      "feedback": "While enthusiastic, the introduction lacks detail on relevant skills and experience for an Excel-focused role.",
+      "time_spent": 0.0,
+      "is_followup": true
+    },
+    {
+      "question_id": null,
+      "user_answer": "so basically I have done a data analysis on network of network where we analyse the traffic on the network and then have some charge",
+      "score": 40.0,
+      "feedback": "The response mentions data analysis but lacks detail on the methods used, tools employed, and specific outcomes, and is grammatically incomplete.",
+      "time_spent": 0.0,
+      "is_followup": true
+    },
+    {
+      "question_id": 3,
+      "user_answer": "so basically we lookup function works by getting the data set and retrieving the value from a data set or a spreadsheet",
+      "score": 65.0,
+      "feedback": "Thanks Anirudh, noted.",
+      "time_spent": 0.0,
+      "is_followup": false
+    },
+    {
+      "question_id": 4,
+      "user_answer": "pivot table basically is created using the data set and it analysis the sales data",
+      "score": 20.0,
+      "feedback": "The answer demonstrates a basic understanding of pivot tables but lacks detail on the process and functionalities.",
+      "time_spent": 0.0,
+      "is_followup": false
+    },
+    {
+      "question_id": 9,
+      "user_answer": "I would change the default calculation by right clicking any value in the row and selecting summarise values option instead of using a calculation summarise the data you can also display in the way of percentage",
+      "score": 65.0,
+      "feedback": "Thanks Anirudh, noted.",
+      "time_spent": 0.0,
+      "is_followup": false
+    },
+    {
+      "question_id": 10,
+      "user_answer": "this is one of the logical functions to return one value if the condition is true and another value if the condition is false for example if A2 is greater than B2 then we return over budget if true or ok if false",
+      "score": 65.0,
+      "feedback": "Thanks Anirudh, noted.",
+      "time_spent": 0.0,
+      "is_followup": false
+    },
+    {
+      "question_id": 11,
+      "user_answer": "we can restrict data entry in a Cell to only specific value using data validation functionality in spreadsheet programs like Microsoft Excel or Google sheets data validation allows you to set rules for what can be entered into a cell to restrict data entry to specific values you can use the list",
+      "score": 65.0,
+      "feedback": "Thanks Anirudh, noted.",
+      "time_spent": 0.0,
+      "is_followup": false
+    },
+    {
+      "question_id": 13,
+      "user_answer": "removing duplicate rows from my data set as common data cleaning task the specific method depends on the tools and the programming language is used using Python with Pandas we can use functions and in excel we can select the",
+      "score": 65.0,
+      "feedback": "Thanks Anirudh, noted.",
+      "time_spent": 0.0,
+      "is_followup": false
+    },
+    {
+      "question_id": 16,
+      "user_answer": "select one or more cells in the range table or pivot report on the home tab in the style group click the arrow next to the conditional formatting then click on the highlight cell rules",
+      "score": 65.0,
+      "feedback": "Thanks Anirudh, noted.",
+      "time_spent": 0.0,
+      "is_followup": false
+    },
+    {
+      "question_id": 17,
+      "user_answer": "s u m i f function allows you to some values in a given range providing the corresponding sales in another range satisfying a chosen criteria the sui MFS functions on the other hand perform the same operation but allows you specify multiple criteria",
+      "score": 65.0,
+      "feedback": "Thanks Anirudh, noted.",
+      "time_spent": 0.0,
+      "is_followup": false
+    },
+    {
+      "question_id": 19,
+      "user_answer": "you find and replace to replace unwanted characters for missing values select range column or row you want to search within the Then visit the find and select option on home tab select replace",
+      "score": 65.0,
+      "feedback": "Thanks Anirudh, noted.",
+      "time_spent": 0.0,
+      "is_followup": false
+    },
+    {
+      "question_id": 20,
+      "user_answer": "essay about chart is a column chart rotated 90\u00b0 both are used to compare different categories of data but the choice between them often depends on the factors like length of the category names",
+      "score": 65.0,
+      "feedback": "Thanks Anirudh, noted.",
+      "time_spent": 0.0,
+      "is_followup": false
+    }
+  ],
+  "communication_score": 52.9,
+  "presentation_score": 49.9,
+  "clarity_score": 52.9,
+  "confidence_score": 47.0,
+  "problem_solving_score": 58.8,
+  "summary": "Overall solid performance. Focus on structuring responses and practicing clarity.",
+  "suggestions": [
+    "Structure answers with 3 steps (what/why/how).",
+    "Practice concise explanations out loud."
+  ],
+  "report_url": "/static/reports/report_bc7b2d34-71ba-4493-b9e9-8b4fd545e9ee.pdf"
+}

@@ -1,10 +1,12 @@
+# main.py
 import os
 import json
 import uuid
-import re
 import tempfile
+import traceback
+import asyncio
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 # FastAPI & related
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
@@ -12,50 +14,57 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# DB (SQLAlchemy)
+# Database (SQLAlchemy)
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float
 from sqlalchemy.orm import sessionmaker, Session, declarative_base
 
-# AI (Gemini) - optional
+# External AI / speech / TTS
 import google.generativeai as genai
-
-# Speech & audio
 import speech_recognition as sr
 import pydub
 from gtts import gTTS
-import shutil
+
+# PDF generation
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
 
 # ------------------------------------------------------------------------
-# 1. Configuration
+# Configuration
 # ------------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./excel_interviewer.db")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # optional
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+MAX_QUESTIONS = int(os.getenv("MAX_QUESTIONS", "10"))
+MAX_FOLLOWUPS = int(os.getenv("MAX_FOLLOWUPS", "1"))
 
-# Ensure static directory exists for TTS audio
 STATIC_DIR = "static"
 TTS_DIR = os.path.join(STATIC_DIR, "tts")
+REPORTS_DIR = os.path.join(STATIC_DIR, "reports")
 os.makedirs(TTS_DIR, exist_ok=True)
+os.makedirs(REPORTS_DIR, exist_ok=True)
 
-app = FastAPI(title="Conversational Excel Interviewer API (Spoken)")
+app = FastAPI(title="Excel Interview Platform API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Serve static files (TTS audio)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # ------------------------------------------------------------------------
-# 2. Database setup
+# Database Setup
 # ------------------------------------------------------------------------
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
-
 
 def get_db():
     db = SessionLocal()
@@ -64,9 +73,18 @@ def get_db():
     finally:
         db.close()
 
+# ------------------------------------------------------------------------
+# Gemini AI Setup (optional)
+# ------------------------------------------------------------------------
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel("gemini-1.5-flash-latest")
+else:
+    gemini_model = None
+    print("WARNING: GEMINI_API_KEY not set. Using fallback analysis/summaries.")
 
 # ------------------------------------------------------------------------
-# 3. Models
+# Models & Schemas
 # ------------------------------------------------------------------------
 class Question(Base):
     __tablename__ = "questions"
@@ -74,385 +92,575 @@ class Question(Base):
     category = Column(String, nullable=False)
     difficulty = Column(String, nullable=False)
     question_text = Column(Text, nullable=False)
-    question_type = Column(String, nullable=False)  # e.g., "conceptual", "formula", "coding", ...
+    question_type = Column(String, nullable=False)
     canonical_answer = Column(Text, nullable=True)
-    alternatives = Column(Text, default="[]")  # JSON list
+    alternatives = Column(Text, default="[]")
     explanation = Column(Text, nullable=True)
-    hints = Column(Text, default="[]")
     tags = Column(String, nullable=True)
 
-
 class InterviewSession(Base):
-    __tablename__ = "interview_sessions"
+    __tablename__ = "sessions"
     id = Column(String, primary_key=True, index=True)
-    role_level = Column(String, nullable=False)
+    candidate_name = Column(String, nullable=False)
+    candidate_email = Column(String, nullable=False)
+    candidate_phone = Column(String, nullable=True)
+    college_name = Column(String, nullable=True)
+    roll_number = Column(String, nullable=True)
+    role_level = Column(String, default="intermediate")
+    status = Column(String, default="in_progress")
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     overall_score = Column(Float, nullable=True)
-    status = Column(String, default="in_progress")
-    # We'll store any pending followup question text here (if AI asks followup)
     pending_followup = Column(Text, nullable=True)
-
 
 class Answer(Base):
     __tablename__ = "answers"
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(String, nullable=False)
-    question_id = Column(Integer, nullable=True)  # None for followups created on the fly
-    user_answer = Column(Text, nullable=False)
-    score = Column(Float, nullable=False)
-    time_spent = Column(Float, nullable=False)
+    question_id = Column(Integer, nullable=True)
+    user_answer = Column(Text, nullable=True)
+    score = Column(Float, nullable=True)
+    time_spent = Column(Float, nullable=True)
     feedback = Column(Text, nullable=True)
-    is_followup = Column(Integer, default=0)  # 1 if this answer was to a followup
-
+    is_followup = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 Base.metadata.create_all(bind=engine)
 
 # ------------------------------------------------------------------------
-# 4. Pydantic Schemas
+# Request Schemas
 # ------------------------------------------------------------------------
 class SessionCreate(BaseModel):
+    candidate_name: str
+    candidate_email: str
+    candidate_phone: Optional[str] = None
+    college_name: Optional[str] = None
+    roll_number: Optional[str] = None
     role_level: str = "intermediate"
 
-
-class AnswerSubmitSchema(BaseModel):
-    question_id: Optional[int] = None
-    user_answer: Optional[str] = None
-    time_spent: float = 0.0
-    # formula field not included here because for multipart/form-data we accept 'formula' via Form
-
-
 # ------------------------------------------------------------------------
-# 5. AI / TTS / STT Services
+# Speech Service (using speech_recognition)
 # ------------------------------------------------------------------------
-# Gemini setup (optional)
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel("gemini-1.5-flash-latest")
-else:
-    gemini_model = None
-    print("WARNING: GEMINI_API_KEY not set. Gemini evaluations disabled.")
-
-
-async def evaluate_answer_with_ai(question: Question, user_answer: str) -> Dict[str, Any]:
-    """
-    Evaluate free-text answer using Gemini (if available).
-    Expected AI JSON: {"score": <0-100>, "feedback": "<...>", "followup": "<optional followup or empty>"}
-    """
-    if not gemini_model:
-        # fallback: simple heuristic
-        return {"score": 60, "feedback": "AI evaluator unavailable; basic fallback used.", "followup": ""}
-
-    prompt = f"""
-    You are an Excel interviewer. Evaluate the user's answer concisely.
-
-    Question: "{question.question_text}"
-    Expected Answer: "{question.canonical_answer or ''}"
-    User's Answer: "{user_answer}"
-
-    Provide output STRICTLY as JSON only, with these keys:
-    {{
-      "score": <int 0-100>,
-      "feedback": "<concise constructive feedback>",
-      "followup": "<a short clarifying follow-up question for the user if needed, or empty string>"
-    }}
-    """
-    try:
-        response = await gemini_model.generate_content_async(prompt)
-        cleaned = response.text.strip().replace("```json", "").replace("```", "")
-        parsed = json.loads(cleaned)
-        # ensure keys exist
-        return {
-            "score": int(parsed.get("score", 0)),
-            "feedback": parsed.get("feedback", ""),
-            "followup": parsed.get("followup", "") or ""
-        }
-    except Exception as e:
-        print("Gemini error:", e)
-        return {"score": 0, "feedback": "Error evaluating your answer.", "followup": ""}
-
-
-class FormulaEvaluator:
-    @staticmethod
-    def normalize(formula: str) -> str:
-        if not formula:
-            return ""
-        return re.sub(r'\s+', '', formula).upper().lstrip('=')
-
-    @staticmethod
-    def evaluate(user_formula: str, correct_formula: str, alternatives: List[str]) -> Dict[str, Any]:
-        user_norm = FormulaEvaluator.normalize(user_formula)
-        if user_norm == FormulaEvaluator.normalize(correct_formula):
-            return {"score": 100, "feedback": "Perfect! That's the exact formula.", "followup": ""}
-        alt_norms = [FormulaEvaluator.normalize(a) for a in alternatives]
-        if user_norm in alt_norms:
-            return {"score": 95, "feedback": "Great! That's a valid alternative formula.", "followup": ""}
-        return {"score": 20, "feedback": "That formula doesn't seem to be correct.", "followup": ""}
-
-
-# Speech recognition (transcription)
-class FreeSpeechRecognition:
+class SpeechService:
     def __init__(self):
         self.recognizer = sr.Recognizer()
 
-    async def transcribe_audio(self, audio_file_path: str) -> str:
-        wav_path = None
+    async def transcribe_audio(self, audio_path: str) -> str:
         try:
-            # pydub handles many formats
-            audio = pydub.AudioSegment.from_file(audio_file_path)
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as wav_file:
-                audio.export(wav_file.name, format="wav")
-                wav_path = wav_file.name
-
-            with sr.AudioFile(wav_path) as source:
+            with sr.AudioFile(audio_path) as source:
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
                 audio_data = self.recognizer.record(source)
-                # Using Google's free API - has limitations
                 text = self.recognizer.recognize_google(audio_data)
-                return text
+                return text.strip()
         except sr.UnknownValueError:
-            return "Could not understand audio"
-        except sr.RequestError as e:
-            return f"API unavailable: {e}"
+            return "I'm sorry, I couldn't understand that."
         except Exception as e:
-            print("Transcription error:", e)
-            return "Failed to transcribe audio."
-        finally:
-            if wav_path and os.path.exists(wav_path):
-                os.unlink(wav_path)
+            print("SpeechService error:", e)
+            return "There was an issue processing your audio."
 
-
-speech_service = FreeSpeechRecognition()
-
-
-# Text-to-speech (gTTS)
-class SpeechSynthesis:
-    @staticmethod
-    def synthesize_text_to_file(text: str, session_id: str = None) -> str:
-        """
-        Synthesize text to a TTS file and return a publicly accessible URL path under /static/.
-        """
-        try:
-            filename = f"tts_{session_id or 'anon'}_{uuid.uuid4().hex[:8]}.mp3"
-            filepath = os.path.join(TTS_DIR, filename)
-            # gTTS will save file
-            tts = gTTS(text=text, lang="en")
-            tts.save(filepath)
-            # return path accessible under /static/
-            return f"/static/tts/{filename}"
-        except Exception as e:
-            print("TTS error:", e)
-            return ""
-
+speech_service = SpeechService()
 
 # ------------------------------------------------------------------------
-# 6. Helper: get next question, prefer followup
+# AI evaluation helper (single question evaluation)
 # ------------------------------------------------------------------------
-def generate_question_audio_and_payload(db_question: Optional[Question], followup_text: Optional[str], session_id: str):
+async def evaluate_answer_with_ai(question_text: str, answer_text: str, candidate_name: str) -> Dict[str, Any]:
+    prompt = f"""
+You are Sarah, a friendly professional Excel interviewer speaking with {candidate_name}.
+Question asked: "{question_text}"
+Candidate's Answer: "{answer_text}"
+
+As Sarah, do the following:
+1) Provide a short conversational acknowledgment.
+2) Give a numeric score between 0 and 100 (integer).
+3) Provide concise feedback highlighting strengths and weaknesses in one sentence.
+4) If the answer is strong, provide a single natural follow-up question (or empty string).
+Respond ONLY with valid JSON:
+
+{{
+  "score": <number>,
+  "feedback": "<short feedback>",
+  "followup": "<follow-up or empty>"
+}}
+"""
+    if not gemini_model:
+        return {"score": 65, "feedback": f"Thanks {candidate_name}, noted.", "followup": ""}
+    try:
+        resp = await gemini_model.generate_content_async(prompt)
+        text = resp.text.strip().replace("```json", "").replace("```", "")
+        parsed = json.loads(text)
+        return {"score": int(parsed.get("score", 0)), "feedback": parsed.get("feedback", "") or "", "followup": parsed.get("followup", "") or ""}
+    except Exception as e:
+        print("AI evaluation error:", e)
+        return {"score": 65, "feedback": f"Thanks {candidate_name}, noted.", "followup": ""}
+
+# ------------------------------------------------------------------------
+# Analysis: use Gemini to analyze all answers and return structured metrics
+# ------------------------------------------------------------------------
+async def generate_analysis_with_gemini(answers: List[Dict[str, Any]], overall_score: float, candidate_name: str) -> Dict[str, Any]:
     """
-    Returns a dict to send to the client: question_id (maybe None if followup),
-    question_text, question_type, audio_url
+    Calls Gemini with a prompt that returns JSON with:
+    - communication_score (0-100)
+    - presentation_score (0-100)
+    - clarity_score (0-100)
+    - confidence_score (0-100)
+    - problem_solving_score (0-100)
+    - overall_score (0-100)
+    - summary (short text)
+    - suggestions (array of 2 short strings)
     """
-    if followup_text:
-        audio_url = SpeechSynthesis.synthesize_text_to_file(followup_text, session_id=session_id)
+    prompt = {
+        "instructions": f"You are an expert interview evaluator. Given candidate '{candidate_name}' answers below, produce a JSON object with numeric scores (0-100) for communication, presentation, clarity, confidence, problem_solving and a short 2-3 sentence summary and two improvement suggestions. Return only JSON with these keys: communication_score, presentation_score, clarity_score, confidence_score, problem_solving_score, overall_score, summary, suggestions (array of two short strings).",
+        "answers": answers,
+        "overall_score": overall_score
+    }
+
+    text_prompt = f"""
+You are an expert interview evaluator.
+
+Candidate: {candidate_name}
+
+The "answers" field below contains raw speech-to-text transcripts from an interview. These transcripts may include spelling mistakes, repeated words, filler ("um", "uh"), partial words, or other transcription artifacts. When you analyze them you should:
+
+- Automatically correct obvious spelling mistakes and minor transcription errors before evaluating (do not invent new content).
+- Normalize filler words and repeated fragments (treat "um", "uh", "you know", repeated words, and trailing partial words as noise).
+- If an answer is ambiguous because of transcription errors, infer the most likely intended meaning in a conservative way; reflect any important assumptions in the summary (the summary may note that the model made small assumptions).
+- Be robust: evaluate intent, clarity, and knowledge even when the wording is imperfect.
+
+Answers JSON:
+{json.dumps(answers, indent=2)}
+
+Current overall_score: {overall_score}
+
+Produce ONLY a JSON object with the following keys (no extra keys, no commentary):
+
+- communication_score (number 0-100)
+- presentation_score (number 0-100)
+- clarity_score (number 0-100)
+- confidence_score (number 0-100)
+- problem_solving_score (number 0-100)
+- overall_score (number 0-100)   # you may adjust this slightly if your analysis warrants it
+- summary (string, 1-3 sentences). In the summary, briefly mention if you corrected obvious transcription errors or made assumptions.
+- suggestions (array of exactly 2 short strings)
+
+Return only the JSON object and nothing else.
+"""
+
+    if not gemini_model:
         return {
-            "question_id": None,
-            "is_followup": True,
-            "question_text": followup_text,
-            "question_type": "followup",
-            "audio_url": audio_url,
-            "hints": []
+            "communication_score": round(overall_score * 0.9, 1),
+            "presentation_score": round(overall_score * 0.85, 1),
+            "clarity_score": round(overall_score * 0.9, 1),
+            "confidence_score": round(overall_score * 0.8, 1),
+            "problem_solving_score": round(overall_score, 1),
+            "overall_score": round(overall_score, 1),
+            "summary": "Overall solid performance. Focus on structuring responses and practicing clarity.",
+            "suggestions": ["Structure answers with 3 steps (what/why/how).", "Practice concise explanations out loud."]
         }
-    if db_question:
-        audio_url = SpeechSynthesis.synthesize_text_to_file(db_question.question_text, session_id=session_id)
+
+    try:
+        resp = await gemini_model.generate_content_async(text_prompt)
+        text = resp.text.strip().replace("```json", "").replace("```", "")
+        parsed = json.loads(text)
+        # sanitize/limit values
+        numeric_keys = ["communication_score", "presentation_score", "clarity_score", "confidence_score", "problem_solving_score", "overall_score"]
+        for k in numeric_keys:
+            if k in parsed:
+                try:
+                    parsed[k] = round(float(parsed[k]), 1)
+                except:
+                    parsed[k] = 0.0
+            else:
+                parsed[k] = 0.0
+        if "suggestions" not in parsed:
+            parsed["suggestions"] = []
+        if "summary" not in parsed:
+            parsed["summary"] = ""
+        return parsed
+    except Exception as e:
+        print("generate_analysis_with_gemini error:", e)
         return {
-            "question_id": db_question.id,
-            "is_followup": False,
-            "question_text": db_question.question_text,
-            "question_type": db_question.question_type,
-            "audio_url": audio_url,
-            "hints": json.loads(db_question.hints or "[]")
+            "communication_score": round(overall_score * 0.9, 1),
+            "presentation_score": round(overall_score * 0.85, 1),
+            "clarity_score": round(overall_score * 0.9, 1),
+            "confidence_score": round(overall_score * 0.8, 1),
+            "problem_solving_score": round(overall_score, 1),
+            "overall_score": round(overall_score, 1),
+            "summary": "Overall solid performance. Focus on structuring responses and practicing clarity.",
+            "suggestions": ["Structure answers with 3 steps (what/why/how).", "Practice concise explanations out loud."]
         }
-    return None
-
 
 # ------------------------------------------------------------------------
-# 7. API Endpoints
+# Helpers (TTS, DB helpers, PDF)
 # ------------------------------------------------------------------------
-@app.post("/api/sessions", status_code=201)
-def create_session(session_data: SessionCreate, db: Session = Depends(get_db)):
-    session = InterviewSession(id=str(uuid.uuid4()), role_level=session_data.role_level)
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    return {"session_id": session.id}
+def text_to_speech_file(text: str, session_id: str) -> str:
+    try:
+        filename = f"tts_{session_id}_{uuid.uuid4().hex[:6]}.mp3"
+        filepath = os.path.join(TTS_DIR, filename)
+        tts = gTTS(text=text, lang="en", slow=False)
+        tts.save(filepath)
+        return f"/static/tts/{filename}"
+    except Exception as e:
+        print("TTS error:", e)
+        return ""
 
-
-@app.get("/api/sessions/{session_id}/question")
-def get_next_question(session_id: str, db: Session = Depends(get_db)):
-    """
-    Returns the next question for the session.
-    If there's a pending followup in session.pending_followup, return that (spoken).
-    Otherwise find the next question matching session.role_level not yet answered.
-    """
-    session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found.")
-
-    # If there's a followup queued, return it (and don't remove it yet; remove when answered)
-    if session.pending_followup:
-        payload = generate_question_audio_and_payload(None, session.pending_followup, session_id)
-        return payload
-
-    # find answered question IDs
-    answered_ids = [q_id for (q_id,) in db.query(Answer.question_id).filter(Answer.session_id == session_id).all() if q_id]
-    next_question = db.query(Question).filter(
+def get_interview_question(session: InterviewSession, db: Session) -> Optional[Question]:
+    answered_ids = [
+        q_id for (q_id,) in db.query(Answer.question_id)
+        .filter(Answer.session_id == session.id, Answer.question_id.isnot(None))
+    ]
+    return db.query(Question).filter(
         Question.difficulty == session.role_level,
         ~Question.id.in_(answered_ids)
     ).first()
 
-    if not next_question:
-        raise HTTPException(status_code=404, detail="Interview complete!")
+def count_main_answers(session_id: str, db: Session) -> int:
+    return db.query(Answer).filter(Answer.session_id == session_id, Answer.is_followup == 0).count()
 
-    payload = generate_question_audio_and_payload(next_question, None, session_id)
-    return payload
+def count_followup_answers(session_id: str, db: Session) -> int:
+    return db.query(Answer).filter(Answer.session_id == session_id, Answer.is_followup == 1).count()
 
+def create_pdf_report(result: dict, session_id: str) -> Optional[str]:
+    """
+    Create a styled PDF under static/reports/report_{session_id}.pdf
+    """
+    filename = f"report_{session_id}.pdf"
+    filepath = os.path.join(REPORTS_DIR, filename)
+    try:
+        doc = SimpleDocTemplate(filepath, pagesize=letter, rightMargin=36,leftMargin=36, topMargin=36,bottomMargin=36)
+        styles = getSampleStyleSheet()
+        story = []
+
+        # Header
+        story.append(Paragraph(f"Interview Report — {result.get('candidate_name','')}", styles['Title']))
+        story.append(Spacer(1, 12))
+
+        # Basic table of scores
+        meta = [
+            ["Overall Score", str(result.get("overall_score",""))],
+            ["Total Questions", str(result.get("total_questions",""))],
+            ["Total Time (min)", str(result.get("total_time_minutes",""))],
+        ]
+        t = Table(meta, hAlign="LEFT", colWidths=[150, 250])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
+            ('TEXTCOLOR',(0,0),(-1,-1),colors.black),
+            ('INNERGRID', (0,0), (-1,-1), 0.25, colors.grey),
+            ('BOX', (0,0), (-1,-1), 0.25, colors.grey),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 12))
+
+        # Metrics block
+        metrics = [
+            ["Communication", result.get("communication_score","")],
+            ["Presentation", result.get("presentation_score","")],
+            ["Clarity", result.get("clarity_score","")],
+            ["Confidence", result.get("confidence_score","")],
+            ["Problem solving", result.get("problem_solving_score","")],
+        ]
+        mt = Table(metrics, hAlign="LEFT", colWidths=[200, 200])
+        mt.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.aliceblue),
+            ('INNERGRID', (0,0), (-1,-1), 0.25, colors.grey),
+            ('BOX', (0,0), (-1,-1), 0.25, colors.grey),
+        ]))
+        story.append(Paragraph("Detailed Metrics", styles['Heading2']))
+        story.append(mt)
+        story.append(Spacer(1, 12))
+
+        # Summary & Suggestions
+        story.append(Paragraph("Summary", styles['Heading2']))
+        story.append(Paragraph(result.get("summary",""), styles['BodyText']))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Improvement Suggestions", styles['Heading2']))
+        for s in result.get("suggestions", []):
+            story.append(Paragraph(f"• {s}", styles['BodyText']))
+        story.append(Spacer(1, 12))
+
+        # Answers table (question_id, user_answer, score, feedback)
+        story.append(Paragraph("Answers", styles['Heading2']))
+        answers_table_data = [["QID","Answer (truncated)","Score","Followup","Feedback (truncated)"]]
+        for a in result.get("answers",[]):
+            ans = (a.get("user_answer") or "")[:150].replace("\n"," ")
+            fb = (a.get("feedback") or "")[:150].replace("\n"," ")
+            answers_table_data.append([str(a.get("question_id")), ans, str(a.get("score")), str(a.get("is_followup")), fb])
+        table = Table(answers_table_data, colWidths=[40, 260, 50, 50, 140])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
+            ('VALIGN',(0,0),(-1,-1),'TOP'),
+            ('INNERGRID', (0,0), (-1,-1), 0.25, colors.grey),
+            ('BOX', (0,0), (-1,-1), 0.25, colors.grey),
+        ]))
+        story.append(table)
+        story.append(Spacer(1, 12))
+
+        doc.build(story)
+        return f"/static/reports/{filename}"
+    except Exception as e:
+        print("create_pdf_report error:", e)
+        traceback.print_exc()
+        return None
+
+# ------------------------------------------------------------------------
+# API Endpoints
+# ------------------------------------------------------------------------
+@app.post("/api/sessions", status_code=201)
+def create_session(session_data: SessionCreate, db: Session = Depends(get_db)):
+    session = InterviewSession(id=str(uuid.uuid4()), **session_data.dict())
+    session.pending_followup = (
+        f"Hi {session.candidate_name}, welcome to your interview! "
+        "Before we dive into Excel, could you please introduce yourself?"
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    print(f"[create_session] created session_id={session.id}")
+    return {"session_id": session.id}
+
+@app.get("/api/sessions/{session_id}/question")
+def get_question_endpoint(session_id: str, db: Session = Depends(get_db)):
+    session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # if completed already -> respond done
+    if session.status == "completed":
+        closing_text = f"Thank you {session.candidate_name}! You've completed the interview."
+        return {"question_id": None, "is_complete": True, "question_text": closing_text, "audio_url": text_to_speech_file(closing_text, session_id)}
+
+    main_count = count_main_answers(session.id, db)
+    if main_count >= MAX_QUESTIONS:
+        # finalize
+        session.status = "completed"
+        session.completed_at = datetime.utcnow()
+        session.pending_followup = None
+        db.commit()
+        closing_text = f"Thank you {session.candidate_name}! You've completed the interview (max questions reached)."
+        return {"question_id": None, "is_complete": True, "question_text": closing_text, "audio_url": text_to_speech_file(closing_text, session_id)}
+
+    # pending followup first
+    if session.pending_followup:
+        has_answers = db.query(Answer).filter(Answer.session_id == session.id).first() is not None
+        is_intro = (not has_answers) and session.status == "in_progress"
+        return {"question_id": None, "is_followup": True, "question_text": session.pending_followup, "audio_url": text_to_speech_file(session.pending_followup, session_id)}
+
+    # next DB question
+    next_question = get_interview_question(session, db)
+    if next_question:
+        return {"question_id": next_question.id, "is_followup": False, "question_text": next_question.question_text, "audio_url": text_to_speech_file(next_question.question_text, session_id)}
+
+    # no more questions -> finalize
+    session.status = "completed"
+    session.completed_at = datetime.utcnow()
+    db.commit()
+    closing_text = f"Thank you {session.candidate_name}! You've completed all the questions. You'll see the results now."
+    return {"question_id": None, "is_complete": True, "question_text": closing_text, "audio_url": text_to_speech_file(closing_text, session_id)}
 
 @app.post("/api/sessions/{session_id}/answer")
 async def submit_answer(
     session_id: str,
     question_id: Optional[int] = Form(None),
     time_spent: float = Form(0.0),
-    # text answer (transcribed or typed) can be provided directly
     text_answer: Optional[str] = Form(None),
-    # formula field for formula questions
-    formula: Optional[str] = Form(None),
-    # or an audio file (multipart)
     audio: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
-    """
-    Accepts either:
-     - For formula questions: provide 'question_id' (int) and 'formula' (str) as form fields.
-     - For spoken answers: upload 'audio' (file), optionally with 'question_id'.
-       If the question is a followup (question_id=None but session.pending_followup present), it uses that followup text.
-     - Alternatively: send 'text_answer' (string) directly (useful for debugging or when frontend sends transcription).
-    """
+    try:
+        session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found.")
+        if session.status == "completed":
+            raise HTTPException(status_code=400, detail="Session already completed")
 
-    # If it's a followup response, question_id will be None and pending_followup has text
-    is_followup = 0
-    question_obj = None
-    followup_text = None
-    if question_id:
-        question_obj = db.query(Question).filter(Question.id == question_id).first()
-        if not question_obj:
-            raise HTTPException(status_code=404, detail="Question not found.")
-    else:
-        # no question_id -> treat as followup if present
-        if session.pending_followup:
-            is_followup = 1
-            followup_text = session.pending_followup
+        is_followup = 0
+        question_text = ""
+
+        if question_id is None:
+            if session.pending_followup:
+                is_followup = 1
+                question_text = session.pending_followup
+            else:
+                next_q = get_interview_question(session, db)
+                if not next_q:
+                    raise HTTPException(status_code=400, detail="No question_id provided and no available question.")
+                question_id = next_q.id
+                question_text = next_q.question_text
         else:
-            raise HTTPException(status_code=400, detail="No question_id provided and no followup pending.")
+            qobj = db.query(Question).filter(Question.id == question_id).first()
+            if not qobj:
+                raise HTTPException(status_code=404, detail="Question not found")
+            question_text = qobj.question_text
 
-    # Acquire the user's answer text
-    user_answer_text = None
-    # For formula-type questions: prefer 'formula' field
-    if question_obj and question_obj.question_type == "formula":
-        if not formula:
-            raise HTTPException(status_code=400, detail="Formula-type question requires 'formula' field.")
-        user_answer_text = formula
-    else:
-        # If text_answer provided directly, use it
+        # obtain user answer text
+        user_answer_text = None
         if text_answer:
             user_answer_text = text_answer
         elif audio:
-            # Save uploaded audio to temp file and transcribe
+            tmp_path = None
+            wav_path = None
             try:
-                suffix = os.path.splitext(audio.filename or "")[-1] or ".tmp"
+                suffix = os.path.splitext(audio.filename or "")[-1] or ".webm"
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                     content = await audio.read()
                     tmp.write(content)
                     tmp_path = tmp.name
-                transcription = await speech_service.transcribe_audio(tmp_path)
-                user_answer_text = transcription
+                try:
+                    audio_seg = pydub.AudioSegment.from_file(tmp_path)
+                    wav_path = tmp_path + ".wav"
+                    audio_seg.export(wav_path, format="wav")
+                    user_answer_text = await speech_service.transcribe_audio(wav_path)
+                except Exception as e:
+                    print("pydub conversion/transcription failed:", e)
+                    user_answer_text = await speech_service.transcribe_audio(tmp_path)
             finally:
-                if 'tmp_path' in locals() and os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except:
+                        pass
+                if wav_path and os.path.exists(wav_path):
+                    try:
+                        os.remove(wav_path)
+                    except:
+                        pass
         else:
-            raise HTTPException(status_code=400, detail="No answer provided; include audio or text_answer (or formula for formula questions).")
+            raise HTTPException(status_code=400, detail="No answer provided")
 
-    # Evaluate
-    if question_obj and question_obj.question_type == "formula":
-        alternatives = json.loads(question_obj.alternatives or "[]")
-        result = FormulaEvaluator.evaluate(user_answer_text, question_obj.canonical_answer or "", alternatives)
-    else:
-        # Build a synthetic Question object for followups if needed
-        if is_followup:
-            # create a temporary simple object to pass the followup prompt context
-            temp_q = Question(id=None, question_text=followup_text, canonical_answer=None)
-            result = await evaluate_answer_with_ai(temp_q, user_answer_text)
+        # Evaluate via Gemini (or fallback)
+        evaluation = await evaluate_answer_with_ai(question_text, user_answer_text, session.candidate_name)
+
+        db_answer = Answer(
+            session_id=session_id,
+            question_id=question_id,
+            user_answer=user_answer_text,
+            score=float(evaluation.get("score", 0)),
+            time_spent=float(time_spent),
+            feedback=evaluation.get("feedback", ""),
+            is_followup=is_followup,
+        )
+        db.add(db_answer)
+
+        # followup management: only allow at most MAX_FOLLOWUPS
+        followup_text = (evaluation.get("followup") or "").strip()
+        existing_followups = count_followup_answers(session_id, db)
+        if followup_text and existing_followups < MAX_FOLLOWUPS:
+            session.pending_followup = followup_text
         else:
-            result = await evaluate_answer_with_ai(question_obj, user_answer_text)
-
-    # Save the answer record
-    db_answer = Answer(
-        session_id=session_id,
-        question_id=question_id if question_id else None,
-        user_answer=user_answer_text,
-        score=float(result.get("score", 0)),
-        time_spent=float(time_spent),
-        feedback=result.get("feedback", ""),
-        is_followup=is_followup
-    )
-    db.add(db_answer)
-
-    # If AI provided followup, queue it in session.pending_followup
-    followup_text_from_ai = result.get("followup", "").strip() if isinstance(result.get("followup", ""), str) else ""
-    if followup_text_from_ai:
-        session.pending_followup = followup_text_from_ai
-    else:
-        # If this was a followup answer, clear it
-        if is_followup:
             session.pending_followup = None
 
-    db.commit()
-    db.refresh(db_answer)
-    db.refresh(session)
+        db.commit()
+        db.refresh(session)
 
-    return {
-        "score": result.get("score"),
-        "feedback": result.get("feedback"),
-        "followup_queued": bool(session.pending_followup),
-        "pending_followup_text": session.pending_followup or ""
+        # if reached max questions -> finalize
+        main_count = count_main_answers(session_id, db)
+        if main_count >= MAX_QUESTIONS:
+            session.status = "completed"
+            session.completed_at = datetime.utcnow()
+            session.pending_followup = None
+            db.commit()
+            return {"score": evaluation.get("score"), "feedback": evaluation.get("feedback"), "user_transcript": user_answer_text, "next_step": None, "is_complete": True, "message": "Max questions reached; interview completed."}
+
+        return {"score": evaluation.get("score"), "feedback": evaluation.get("feedback"), "user_transcript": user_answer_text, "next_step": session.pending_followup, "is_complete": False}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("[submit_answer] unexpected error:", e)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/api/sessions/{session_id}/report")
+def get_session_report(session_id: str, db: Session = Depends(get_db)):
+    """
+    Build a detailed report using Gemini for analysis (structured JSON),
+    save a PDF under static/reports and return the report JSON (and pdf url).
+    """
+    session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    answers_objs = db.query(Answer).filter(Answer.session_id == session_id).all()
+    if not answers_objs:
+        raise HTTPException(status_code=404, detail="No answers found for session")
+
+    answers = []
+    for a in answers_objs:
+        answers.append({
+            "question_id": a.question_id,
+            "user_answer": a.user_answer,
+            "score": a.score,
+            "feedback": a.feedback,
+            "time_spent": a.time_spent,
+            "is_followup": bool(a.is_followup),
+        })
+
+    total_score = sum((a["score"] or 0) for a in answers)
+    average_score = total_score / len(answers) if answers else 0.0
+    total_time = sum((a["time_spent"] or 0) for a in answers)
+
+    session.overall_score = average_score
+    session.completed_at = session.completed_at or datetime.utcnow()
+    session.status = "completed"
+    db.commit()
+
+    # call gemini-based analysis (async -> run)
+    try:
+        analysis = asyncio.get_event_loop().run_until_complete(generate_analysis_with_gemini(answers, average_score, session.candidate_name))
+    except Exception as e:
+        print("Analysis generation failed:", e)
+        analysis = {
+            "communication_score": round(average_score * 0.9, 1),
+            "presentation_score": round(average_score * 0.85, 1),
+            "clarity_score": round(average_score * 0.9, 1),
+            "confidence_score": round(average_score * 0.8, 1),
+            "problem_solving_score": round(average_score, 1),
+            "overall_score": round(average_score, 1),
+            "summary": "Overall solid performance. Focus on structuring responses and practicing clarity.",
+            "suggestions": ["Structure answers with 3 steps (what/why/how).", "Practice concise explanations out loud."]
+        }
+
+    # Build result object
+    result = {
+        "session_id": session_id,
+        "candidate_name": session.candidate_name,
+        "candidate_email": session.candidate_email,
+        "college_name": session.college_name,
+        "roll_number": session.roll_number,
+        "skill_level": session.role_level,
+        "started_at": session.started_at.isoformat(),
+        "completed_at": session.completed_at.isoformat(),
+        "overall_score": round(average_score, 1),
+        "total_questions": len(answers),
+        "total_time_minutes": round(total_time / 60, 1),
+        "answers": answers,
+        # merge analysis fields
+        "communication_score": analysis.get("communication_score"),
+        "presentation_score": analysis.get("presentation_score"),
+        "clarity_score": analysis.get("clarity_score"),
+        "confidence_score": analysis.get("confidence_score"),
+        "problem_solving_score": analysis.get("problem_solving_score"),
+        "summary": analysis.get("summary"),
+        "suggestions": analysis.get("suggestions", []),
     }
 
-
-@app.post("/api/transcribe")
-async def transcribe_audio(audio: UploadFile = File(...)):
-    """
-    Upload an audio file and get a transcription (useful for client-side verification).
-    """
+    # Create PDF report and return URL
+    pdf_url = create_pdf_report(result, session_id)
+    result["report_url"] = pdf_url  # may be None if creation failed
+    # also write JSON for convenience
     try:
-        suffix = os.path.splitext(audio.filename or "")[-1] or ".tmp"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            content = await audio.read()
-            tmp.write(content)
-            tmp_path = tmp.name
-
-        transcription = await speech_service.transcribe_audio(tmp_path)
-        return {"transcription": transcription}
+        json_path = os.path.join(REPORTS_DIR, f"report_{session_id}.json")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2)
     except Exception as e:
-        print("Error during transcription:", e)
-        raise HTTPException(status_code=500, detail="Transcription failed.")
-    finally:
-        if 'tmp_path' in locals() and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        print("Failed to write JSON report:", e)
 
+    return result
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "ok"}
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

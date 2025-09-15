@@ -1,20 +1,28 @@
+# Core FastAPI and web framework
 fastapi
 uvicorn[standard]
-sqlalchemy
-psycopg2-binary
-redis
-groq
-whisper
-numpy
-scikit-learn
-pandas
 python-multipart
-pydantic
-python-jose[cryptography]
-passlib[bcrypt]
+
+# Database
+sqlalchemy
 alembic
+
+psycopg2-binary
+
+# AI Services
 google-generativeai
-requests
+
+# Speech Recognition
 SpeechRecognition
 pydub
 pyaudio
+
+# Data processing
+pydantic
+python-jose[cryptography]
+
+# Development utilities
+python-dotenv
+
+reportlab
+Pillow
