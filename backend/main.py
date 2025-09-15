@@ -43,7 +43,7 @@ from reportlab.lib.enums import TA_LEFT
 # Configuration
 # ------------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./excel_interviewer.db")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyAAdSCqdP6ZQfhNaa8iRQBQV-acY-24C9U")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MAX_QUESTIONS = int(os.getenv("MAX_QUESTIONS", "10"))
 MAX_FOLLOWUPS = int(os.getenv("MAX_FOLLOWUPS", "1"))
 

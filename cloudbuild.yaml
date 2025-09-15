@@ -1,0 +1,23 @@
+steps:
+  # Step 1: Build the Backend Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/backend-app:latest'
+      - './backend' # Specifies the directory containing the backend Dockerfile
+    id: 'Build Backend'
+
+  # Step 2: Build the Frontend Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/frontend-app:latest'
+      - './frontend' # Specifies the directory containing the frontend Dockerfile
+    id: 'Build Frontend'
+
+# Push both images to Google Container Registry (GCR)
+images:
+  - 'gcr.io/$PROJECT_ID/backend-app:latest'
+  - 'gcr.io/$PROJECT_ID/frontend-app:latest'
