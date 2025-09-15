@@ -411,31 +411,38 @@ const InterviewPage = ({ userDetails, onFinish }) => {
     setIsLoading(true);
     setTranscript('Processing your answer...');
 
-    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-    const audioFile = new File([audioBlob], 'answer.webm', { type: 'audio/webm' });
+    const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+
     try {
+      const audioURL = URL.createObjectURL(audioBlob);
+      const audioEl = new Audio(audioURL);
+
+      const durationSeconds = await new Promise((resolve) => {
+        audioEl.addEventListener('loadedmetadata', () => {
+          const d = audioEl.duration || 0.0;
+          resolve(d);
+        });
+        audioEl.addEventListener('error', () => resolve(0.0));
+      });
+
+      // release object URL
+      URL.revokeObjectURL(audioURL);
+
+      const audioFile = new File([audioBlob], 'answer.wav', { type: 'audio/wav' });
+
       const formData = new FormData();
       formData.append('audio', audioFile);
-      formData.append('time_spent', "0.0");
+      // send actual time_spent in seconds (so server can compute minutes)
+      formData.append('time_spent', String(durationSeconds));
 
       const response = await fetch(`${API_BASE}/sessions/${userDetails.session_id}/answer`, {
         method: 'POST',
         body: formData,
       });
 
-      if (!response.ok) {
-        const txt = await response.text();
-        throw new Error(`Failed to process audio: ${txt}`);
-      }
+      if (!response.ok) throw new Error('Failed to process audio');
       const data = await response.json();
       setTranscript(data.user_transcript || 'Processed answer.');
-
-      // if backend says interview is complete, go to results
-      if (data.is_complete) {
-        onFinish();
-        return;
-      }
-
       // Fetch next question
       const nextQ = await fetch(`${API_BASE}/sessions/${userDetails.session_id}/question`);
       if (nextQ.ok) {
@@ -443,9 +450,6 @@ const InterviewPage = ({ userDetails, onFinish }) => {
         setQuestionText(qData.question_text || 'Next question will appear soon.');
         setQuestionAudioUrl(qData.audio_url || null);
         playedRef.current = false;
-        if (qData.is_complete) {
-          onFinish();
-        }
       }
     } catch (err) {
       console.error('Error sending audio:', err);
@@ -454,6 +458,7 @@ const InterviewPage = ({ userDetails, onFinish }) => {
       setIsLoading(false);
     }
   };
+
 
   // Also add keyboard shortcut (space) to toggle recording
   useEffect(() => {

@@ -7,7 +7,8 @@ import traceback
 import asyncio
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-
+from dotenv import load_dotenv
+load_dotenv()
 # FastAPI & related
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,14 +28,22 @@ from gtts import gTTS
 # PDF generation
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+    PageBreak,
+)
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_LEFT
 
 # ------------------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------------------
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./excel_interviewer.db")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyAAdSCqdP6ZQfhNaa8iRQBQV-acY-24C9U")
 MAX_QUESTIONS = int(os.getenv("MAX_QUESTIONS", "10"))
 MAX_FOLLOWUPS = int(os.getenv("MAX_FOLLOWUPS", "1"))
 
@@ -320,79 +329,113 @@ def count_followup_answers(session_id: str, db: Session) -> int:
     return db.query(Answer).filter(Answer.session_id == session_id, Answer.is_followup == 1).count()
 
 def create_pdf_report(result: dict, session_id: str) -> Optional[str]:
-    """
-    Create a styled PDF under static/reports/report_{session_id}.pdf
-    """
     filename = f"report_{session_id}.pdf"
     filepath = os.path.join(REPORTS_DIR, filename)
     try:
         doc = SimpleDocTemplate(filepath, pagesize=letter, rightMargin=36,leftMargin=36, topMargin=36,bottomMargin=36)
         styles = getSampleStyleSheet()
+        # small paragraph style for table cells
+        styles.add(ParagraphStyle(name="TableCell", parent=styles["BodyText"], fontSize=8, leading=10))
+        styles.add(ParagraphStyle(name="ReportTitle", parent=styles["Title"], fontSize=20, leading=22))
+        styles.add(ParagraphStyle(name="Small", parent=styles["Normal"], fontSize=9))
+
         story = []
 
         # Header
-        story.append(Paragraph(f"Interview Report — {result.get('candidate_name','')}", styles['Title']))
-        story.append(Spacer(1, 12))
+        story.append(Paragraph(f"Interview Report — {result.get('candidate_name','')}", styles['ReportTitle']))
+        story.append(Spacer(1, 8))
 
-        # Basic table of scores
-        meta = [
-            ["Overall Score", str(result.get("overall_score",""))],
-            ["Total Questions", str(result.get("total_questions",""))],
-            ["Total Time (min)", str(result.get("total_time_minutes",""))],
+        # Meta info
+        candidate = result.get("candidate_name","")
+        email = result.get("candidate_email","")
+        started_at = result.get("started_at","")
+        completed_at = result.get("completed_at","")
+        overall_score = result.get("overall_score","")
+
+        total_time_minutes = result.get("total_time_minutes")
+        if total_time_minutes is None:
+            try:
+                total_time_minutes = round(sum(a.get("time_spent") or 0 for a in result.get("answers", [])) / 60.0, 1)
+            except:
+                total_time_minutes = 0.0
+
+        meta_table_data = [
+            ["Candidate:", candidate, "Overall Score:", str(overall_score)],
+            ["Email:", email, "Total Time (min):", f"{total_time_minutes:.1f}"],
+            ["Started At:", started_at or "-", "Completed At:", completed_at or "-"],
         ]
-        t = Table(meta, hAlign="LEFT", colWidths=[150, 250])
-        t.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),
-            ('TEXTCOLOR',(0,0),(-1,-1),colors.black),
-            ('INNERGRID', (0,0), (-1,-1), 0.25, colors.grey),
-            ('BOX', (0,0), (-1,-1), 0.25, colors.grey),
+        meta_table = Table(meta_table_data, colWidths=[70, 220, 90, 120])
+        meta_table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,-1), colors.whitesmoke),
+            ("BOX", (0,0), (-1,-1), 0.5, colors.gray),
+            ("INNERGRID", (0,0), (-1,-1), 0.25, colors.lightgrey),
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("FONTSIZE", (0,0), (-1,-1), 9),
+            ("LEFTPADDING", (0,0), (-1,-1), 6),
+            ("RIGHTPADDING", (0,0), (-1,-1), 6),
         ]))
-        story.append(t)
-        story.append(Spacer(1, 12))
+        story.append(meta_table)
+        story.append(Spacer(1, 10))
 
         # Metrics block
-        metrics = [
-            ["Communication", result.get("communication_score","")],
-            ["Presentation", result.get("presentation_score","")],
-            ["Clarity", result.get("clarity_score","")],
-            ["Confidence", result.get("confidence_score","")],
-            ["Problem solving", result.get("problem_solving_score","")],
+        metrics_keys = [
+            ("Communication", result.get("communication_score")),
+            ("Presentation", result.get("presentation_score")),
+            ("Clarity", result.get("clarity_score")),
+            ("Confidence", result.get("confidence_score")),
+            ("Problem Solving", result.get("problem_solving_score")),
         ]
-        mt = Table(metrics, hAlign="LEFT", colWidths=[200, 200])
-        mt.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.aliceblue),
-            ('INNERGRID', (0,0), (-1,-1), 0.25, colors.grey),
-            ('BOX', (0,0), (-1,-1), 0.25, colors.grey),
+        metrics_rows = [[k for k,_ in metrics_keys], [str(v) if v is not None else "-" for _,v in metrics_keys]]
+        metrics_tbl = Table(metrics_rows, colWidths=[100]*len(metrics_keys))
+        metrics_tbl.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#f0f4ff")),
+            ("INNERGRID", (0,0), (-1,-1), 0.25, colors.grey),
+            ("BOX", (0,0), (-1,-1), 0.25, colors.grey),
+            ("FONTSIZE", (0,0), (-1,-1), 9),
+            ("ALIGN", (0,0), (-1,-1), "CENTER"),
         ]))
         story.append(Paragraph("Detailed Metrics", styles['Heading2']))
-        story.append(mt)
-        story.append(Spacer(1, 12))
+        story.append(metrics_tbl)
+        story.append(Spacer(1, 10))
 
         # Summary & Suggestions
         story.append(Paragraph("Summary", styles['Heading2']))
-        story.append(Paragraph(result.get("summary",""), styles['BodyText']))
+        story.append(Paragraph(result.get("summary",""), styles['Small']))
         story.append(Spacer(1, 8))
         story.append(Paragraph("Improvement Suggestions", styles['Heading2']))
-        for s in result.get("suggestions", []):
-            story.append(Paragraph(f"• {s}", styles['BodyText']))
+        for s in result.get("suggestions", [])[:2]:
+            story.append(Paragraph(f"• {s}", styles['Small']))
         story.append(Spacer(1, 12))
 
-        # Answers table (question_id, user_answer, score, feedback)
+        # Answers table with wrapped paragraphs
         story.append(Paragraph("Answers", styles['Heading2']))
-        answers_table_data = [["QID","Answer (truncated)","Score","Followup","Feedback (truncated)"]]
-        for a in result.get("answers",[]):
-            ans = (a.get("user_answer") or "")[:150].replace("\n"," ")
-            fb = (a.get("feedback") or "")[:150].replace("\n"," ")
-            answers_table_data.append([str(a.get("question_id")), ans, str(a.get("score")), str(a.get("is_followup")), fb])
-        table = Table(answers_table_data, colWidths=[40, 260, 50, 50, 140])
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.lightgrey),
-            ('VALIGN',(0,0),(-1,-1),'TOP'),
-            ('INNERGRID', (0,0), (-1,-1), 0.25, colors.grey),
-            ('BOX', (0,0), (-1,-1), 0.25, colors.grey),
+        col_widths = [40, 260, 50, 60, 120]  # QID, Answer, Score, Followup, Feedback
+        header = ["QID", "Answer (truncated)", "Score", "Followup", "Feedback (truncated)"]
+        table_data = [header]
+        for a in result.get("answers", []):
+            qid = a.get("question_id") if a.get("question_id") is not None else "None"
+            ans_text = (a.get("user_answer") or "")
+            feedback = (a.get("feedback") or "")
+            score = a.get("score") if a.get("score") is not None else "-"
+            is_followup = "Yes" if a.get("is_followup") else "No"
+            ans_para = Paragraph(ans_text.replace("\n","<br/>")[:800], styles["TableCell"])
+            fb_para = Paragraph(feedback.replace("\n","<br/>")[:800], styles["TableCell"])
+            table_data.append([str(qid), ans_para, str(score), is_followup, fb_para])
+        answers_table = Table(table_data, colWidths=col_widths, repeatRows=1)
+        answers_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#e6e6e6")),
+            ('GRID', (0,0), (-1,-1), 0.25, colors.grey),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('FONTSIZE', (0,0), (-1,-1), 8),
+            ('LEFTPADDING', (0,0), (-1,-1), 6),
+            ('RIGHTPADDING', (0,0), (-1,-1), 6),
         ]))
-        story.append(table)
+        story.append(answers_table)
         story.append(Spacer(1, 12))
+
+        # Footer note
+        gen_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        story.append(Paragraph(f"Generated: {gen_time}", styles['Small']))
 
         doc.build(story)
         return f"/static/reports/{filename}"
@@ -400,6 +443,7 @@ def create_pdf_report(result: dict, session_id: str) -> Optional[str]:
         print("create_pdf_report error:", e)
         traceback.print_exc()
         return None
+
 
 # ------------------------------------------------------------------------
 # API Endpoints
@@ -571,7 +615,7 @@ async def submit_answer(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.get("/api/sessions/{session_id}/report")
-def get_session_report(session_id: str, db: Session = Depends(get_db)):
+async def get_session_report(session_id: str, db: Session = Depends(get_db)):
     """
     Build a detailed report using Gemini for analysis (structured JSON),
     save a PDF under static/reports and return the report JSON (and pdf url).
@@ -599,14 +643,14 @@ def get_session_report(session_id: str, db: Session = Depends(get_db)):
     average_score = total_score / len(answers) if answers else 0.0
     total_time = sum((a["time_spent"] or 0) for a in answers)
 
+    # update session fields
     session.overall_score = average_score
     session.completed_at = session.completed_at or datetime.utcnow()
     session.status = "completed"
     db.commit()
 
-    # call gemini-based analysis (async -> run)
     try:
-        analysis = asyncio.get_event_loop().run_until_complete(generate_analysis_with_gemini(answers, average_score, session.candidate_name))
+        analysis = await generate_analysis_with_gemini(answers, average_score, session.candidate_name)
     except Exception as e:
         print("Analysis generation failed:", e)
         analysis = {
@@ -634,7 +678,6 @@ def get_session_report(session_id: str, db: Session = Depends(get_db)):
         "total_questions": len(answers),
         "total_time_minutes": round(total_time / 60, 1),
         "answers": answers,
-        # merge analysis fields
         "communication_score": analysis.get("communication_score"),
         "presentation_score": analysis.get("presentation_score"),
         "clarity_score": analysis.get("clarity_score"),
@@ -646,8 +689,8 @@ def get_session_report(session_id: str, db: Session = Depends(get_db)):
 
     # Create PDF report and return URL
     pdf_url = create_pdf_report(result, session_id)
-    result["report_url"] = pdf_url  # may be None if creation failed
-    # also write JSON for convenience
+    result["report_url"] = pdf_url
+
     try:
         json_path = os.path.join(REPORTS_DIR, f"report_{session_id}.json")
         with open(json_path, "w", encoding="utf-8") as f:
@@ -655,7 +698,11 @@ def get_session_report(session_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         print("Failed to write JSON report:", e)
 
+    # Return result with finish_url (frontend can redirect to this)
+    finish_url = f"/finish?session_id={session_id}"
+    result["finish_url"] = finish_url
     return result
+
 
 @app.get("/api/health")
 def health_check():

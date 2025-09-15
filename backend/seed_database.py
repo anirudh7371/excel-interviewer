@@ -31,7 +31,6 @@ def generate_questions():
       "question_text": "string",
       "question_type": "conceptual|practical",
       "canonical_answer": "string",
-      "hints": ["string", "string", "string"],
       "tags": "comma,separated,tags"
     }
     Ensure valid JSON array only, no markdown or explanation.
@@ -61,7 +60,6 @@ def seed_questions():
                 question_text=q["question_text"],
                 question_type=q["question_type"],
                 canonical_answer=q["canonical_answer"],
-                hints=json.dumps(q["hints"]),
                 tags=q.get("tags", "")
             )
             db.add(question)

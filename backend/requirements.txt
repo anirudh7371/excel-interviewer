@@ -26,3 +26,7 @@ python-dotenv
 
 reportlab
 Pillow
+
+
+gTTS
+python-dotenv
