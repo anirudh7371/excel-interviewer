@@ -4,8 +4,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from main import Base, Question
 import google.generativeai as genai
-
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./excel_interviewer.db")
+from dotenv import load_dotenv
+from pathlib import Path
+env_path = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=env_path)
+DATABASE_URL = os.getenv("DATABASE_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # Configure Gemini
@@ -37,7 +40,6 @@ def generate_questions():
     """
     response = gemini_model.generate_content(prompt)
     text = response.text.strip()
-    # remove any accidental formatting
     text = text.replace("```json", "").replace("```", "")
     return json.loads(text)
 
@@ -66,9 +68,9 @@ def seed_questions():
             added += 1
 
         db.commit()
-        print(f"✅ Added {added} AI-generated questions")
+        print(f"Added {added} AI-generated questions")
     except Exception as e:
-        print(f"❌ Error seeding: {e}")
+        print(f"Error seeding: {e}")
         db.rollback()
     finally:
         db.close()

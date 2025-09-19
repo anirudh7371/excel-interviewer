@@ -1,0 +1,25 @@
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore virtualenvs
+venv/
+.env
+
+# Ignore Git
+.git
+.gitignore
+
+# Ignore local DB/logs
+*.db
+*.sqlite3
+*.log
+
+# Ignore frontend builds (unless you’re deploying frontend separately)
+frontend/node_modules/
+frontend/build/
+
+# Ignore static assets (they will be created fresh inside container)
+backend/static/

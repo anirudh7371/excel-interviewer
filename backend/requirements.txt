@@ -6,34 +6,33 @@ python-multipart
 # Database
 sqlalchemy
 alembic
-
 psycopg2-binary
 
 # AI Services
 google-generativeai
-
-#gcp
-google-cloud-sql-connector
 google-cloud-storage
 google-cloud-logging
 
 # Speech Recognition
+google-cloud-speech
 SpeechRecognition
 pydub
-pyaudio
 
 # Data processing
 pydantic
 python-jose[cryptography]
 
-# Development utilities
+# Environment & Config
 python-dotenv
 
+# PDF/Reports
 reportlab
 Pillow
-
-
 gTTS
-python-dotenv
-gunicorn
+
+# Logging utilities
 structlog
+
+# Async HTTP
+aiohttp==3.8.6
+aiohttp-retry==2.8.3

@@ -9,7 +9,7 @@ import asyncio
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from dotenv import load_dotenv
-load_dotenv(dot_env_path="./.env")
+load_dotenv(dotenv_path="./.env")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,7 +29,7 @@ from sqlalchemy.orm import sessionmaker, Session, declarative_base
 
 # External AI / speech / TTS
 import google.generativeai as genai
-import speech_recognition as sr
+from google.cloud import speech
 import pydub
 from gtts import gTTS
 
@@ -50,11 +50,7 @@ from reportlab.lib.enums import TA_LEFT
 # ------------------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------------------
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./excel_interviewer.db")
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-if "railway.internal" in DATABASE_URL:
-    DATABASE_URL = DATABASE_URL.replace("railway.internal", "localhost")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MAX_QUESTIONS = int(os.getenv("MAX_QUESTIONS", "10"))
@@ -171,17 +167,28 @@ class SessionCreate(BaseModel):
 # ------------------------------------------------------------------------
 class SpeechService:
     def __init__(self):
-        self.recognizer = sr.Recognizer()
+        self.client = speech.SpeechClient()
 
     async def transcribe_audio(self, audio_path: str) -> str:
         try:
-            with sr.AudioFile(audio_path) as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
-                audio_data = self.recognizer.record(source)
-                text = self.recognizer.recognize_google(audio_data)
-                return text.strip()
-        except sr.UnknownValueError:
-            return "I'm sorry, I couldn't understand that."
+            with open(audio_path, "rb") as f:
+                content = f.read()
+
+            audio = speech.RecognitionAudio(content=content)
+            config = speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=16000,
+                language_code="en-IN",
+                enable_automatic_punctuation=True,
+            )
+
+            response = self.client.recognize(config=config, audio=audio)
+
+            if not response.results:
+                return "I'm sorry, I couldn't understand that."
+
+            transcript = " ".join(r.alternatives[0].transcript for r in response.results)
+            return transcript.strip()
         except Exception as e:
             print("SpeechService error:", e)
             return "There was an issue processing your audio."
@@ -353,7 +360,6 @@ def create_pdf_report(result: dict, session_id: str) -> Optional[str]:
     try:
         doc = SimpleDocTemplate(filepath, pagesize=letter, rightMargin=36,leftMargin=36, topMargin=36,bottomMargin=36)
         styles = getSampleStyleSheet()
-        # small paragraph style for table cells
         styles.add(ParagraphStyle(name="TableCell", parent=styles["BodyText"], fontSize=8, leading=10))
         styles.add(ParagraphStyle(name="ReportTitle", parent=styles["Title"], fontSize=20, leading=22))
         styles.add(ParagraphStyle(name="Small", parent=styles["Normal"], fontSize=9))
@@ -706,7 +712,6 @@ async def get_session_report(session_id: str, db: Session = Depends(get_db)):
         "suggestions": analysis.get("suggestions", []),
     }
 
-    # Create PDF report and return URL
     pdf_url = create_pdf_report(result, session_id)
     result["report_url"] = pdf_url
 
@@ -729,4 +734,4 @@ def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)
